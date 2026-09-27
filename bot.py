@@ -12,7 +12,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+from pathlib import Path
+import json
 from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -21,6 +24,7 @@ from conversation_handlers import respond as core_respond
 
 app = FastAPI(title="Vera Merchant AI Assistant", version="1.0.0")
 START_TIME = time.time()
+STATIC_INDEX = Path(__file__).parent / "static" / "index.html"
 
 # In-Memory Thread-Safe State Stores
 contexts: Dict[tuple[str, str], Dict[str, Any]] = {}  # (scope, context_id) -> {version, payload}
@@ -67,6 +71,55 @@ class ReplyRequest(BaseModel):
     message: str
     received_at: Optional[str] = None
     turn_number: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Frontend & Startup Preloader
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def prefill_dataset():
+    """Auto-load expanded challenge dataset on startup if available."""
+    dataset_dir = Path(__file__).parent / "dataset" / "expanded"
+    if not dataset_dir.exists():
+        return
+    try:
+        cat_dir = dataset_dir / "categories"
+        if cat_dir.exists():
+            for f in cat_dir.glob("*.json"):
+                data = json.load(open(f, encoding="utf-8"))
+                slug = data.get("slug", f.stem)
+                contexts[("category", slug)] = {"version": 1, "payload": data}
+
+        mer_dir = dataset_dir / "merchants"
+        if mer_dir.exists():
+            for f in mer_dir.glob("*.json"):
+                data = json.load(open(f, encoding="utf-8"))
+                mid = data.get("merchant_id", f.stem)
+                contexts[("merchant", mid)] = {"version": 1, "payload": data}
+
+        cust_dir = dataset_dir / "customers"
+        if cust_dir.exists():
+            for f in cust_dir.glob("*.json"):
+                data = json.load(open(f, encoding="utf-8"))
+                cid = data.get("customer_id", f.stem)
+                contexts[("customer", cid)] = {"version": 1, "payload": data}
+
+        trg_dir = dataset_dir / "triggers"
+        if trg_dir.exists():
+            for f in trg_dir.glob("*.json"):
+                data = json.load(open(f, encoding="utf-8"))
+                tid = data.get("id", f.stem)
+                contexts[("trigger", tid)] = {"version": 1, "payload": data}
+    except Exception as e:
+        print(f"[WARN] Error prefilling dataset: {e}", file=sys.stderr)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def frontend():
+    """Serves the minimal interactive testing frontend."""
+    if STATIC_INDEX.exists():
+        return HTMLResponse(content=STATIC_INDEX.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Vera Bot Online</h1><p>Visit <a href='/docs'>/docs</a></p>")
 
 
 # ---------------------------------------------------------------------------
